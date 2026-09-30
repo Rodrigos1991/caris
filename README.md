@@ -8,7 +8,7 @@ Corre **fuera de Odoo**: no se conecta a ninguna base ni escribe nada en Odoo. L
 
 ## Cómo se usa
 
-1. En Odoo, exportar las líneas de la jornada con la plantilla **"Import comprobantes de pago"**. Sin esa plantilla faltan columnas y Caris no puede cruzar los datos.
+1. En Odoo, abrir la jornada › **Pagos** › seleccionar todos › Acciones › Exportar, con la plantilla **"Exportacion Caris"** y formato XLSX. Con otra plantilla faltan columnas y Caris no puede cruzar los datos.
 2. Abrir `caris.html` en Chrome.
 3. Cargar el Excel y los PDFs y apretar **Procesar**. El OCR tarda unos segundos por página. **No cambiar de pestaña mientras procesa**: Chrome frena el OCR en segundo plano.
 4. Revisar el reporte y descargar el ZIP.

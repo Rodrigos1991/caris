@@ -61,7 +61,8 @@
   <p class="sub">Comprobantes de pago Credicoop → ZIP para <b>Jornada de Pago › Importar ZIP de PDFs</b>. Todo se procesa en este navegador; los archivos no se suben a ningún lado.</p>
 
   <div class="card">
-    <div class="step">1. Excel exportado con la plantilla “Import comprobantes de pago”</div>
+    <div class="step">1. Excel exportado con la plantilla “Exportacion Caris”</div>
+    <p class="sub" style="margin:0 0 8px;font-size:14px">En Odoo: Jornada › <b>Pagos</b> › seleccionar <b>todos</b> › Acciones › Exportar › Plantilla <b>Exportacion Caris</b> › XLSX. Con otra plantilla faltan columnas y Caris no procesa.</p>
     <label class="drop" id="dropX">Arrastrá el .xlsx acá o hacé clic<input type="file" id="inX" accept=".xlsx,.xls"></label>
     <div class="files" id="infoX"></div>
   </div>
@@ -138,7 +139,7 @@ async function leerExcel(file) {
   const head = filas[0].map(sinTildes);
   const col = (...claves) => {
     const i = head.findIndex(h => claves.every(c => h.includes(sinTildes(c))));
-    if (i < 0) throw new Error(`No encuentro la columna "${claves.join(" ")}" en el Excel.`);
+    if (i < 0) throw new Error(`No encuentro la columna "${claves.join(" ")}" en el Excel. Exportalo de nuevo con la plantilla “Exportacion Caris”.`);
     return i;
   };
   const cNom = col("cliente/proveedor"), cCuit = col("nif"), cTot = col("total");
