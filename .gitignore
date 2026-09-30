@@ -1,0 +1,9 @@
+# Lista blanca: solo entra el código y su documentación.
+# Todo lo demás (ejemplos, salidas, SQL, handoffs, informes, pedidos) tiene datos reales
+# (CUITs, CBUs, nombres) y NO se sube.
+*
+!.gitignore
+!README.md
+!caris.html
+!caris.py
+!CONTRATO-wizard.md

@@ -1,0 +1,274 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Caris</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1d2330; --muted: #5d6677; --line: #dde1e8;
+    --accent: #6b4fa0; --accent-text: #ffffff; --ok: #1f7a4d; --ok-bg: #e6f4ec;
+    --bad: #b3261e; --bad-bg: #fbe9e7; --warn-bg: #fff6e0; --warn: #7a5600;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14161b; --card: #1d2027; --text: #e6e8ec; --muted: #9aa2b1; --line: #313641;
+      --accent: #9b82d1; --accent-text: #14161b; --ok: #6fcf9a; --ok-bg: #173026;
+      --bad: #f28b82; --bad-bg: #3a1f1d; --warn-bg: #33290f; --warn: #f0c75e;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 900px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 16px; margin-bottom: 14px; }
+  .step { font-weight: 600; margin-bottom: 8px; }
+  .drop { display: block; border: 2px dashed var(--line); border-radius: 8px; padding: 18px; text-align: center; color: var(--muted); cursor: pointer; }
+  .drop.over { border-color: var(--accent); }
+  .drop input { display: none; }
+  .files { margin-top: 8px; font-size: 14px; }
+  button { background: var(--accent); color: var(--accent-text); border: 0; border-radius: 8px; padding: 10px 18px; font-size: 15px; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .45; cursor: default; }
+  .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  progress { flex: 1; min-width: 160px; height: 10px; }
+  #estado { color: var(--muted); font-size: 14px; }
+  .resumen { font-size: 17px; font-weight: 600; }
+  .aviso { background: var(--warn-bg); color: var(--warn); border-radius: 8px; padding: 10px 12px; margin-top: 12px; font-size: 14px; }
+  .tabla { overflow-x: auto; margin-top: 12px; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  td.motivo { white-space: normal; min-width: 220px; }
+  th { color: var(--muted); font-weight: 600; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .ok { color: var(--ok); } .bad { color: var(--bad); }
+  tr.err td { background: var(--bad-bg); }
+  .alcance { font-size: 14px; }
+  .alcance p { margin: 0 0 6px; }
+  .alcance ul { margin: 0 0 6px; padding-left: 22px; }
+  .alcance .nota { color: var(--muted); margin: 0; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Caris</h1>
+  <p class="sub">Comprobantes de pago Credicoop → ZIP para <b>Jornada de Pago › Importar ZIP de PDFs</b>. Todo se procesa en este navegador; los archivos no se suben a ningún lado.</p>
+
+  <div class="card">
+    <div class="step">1. Excel exportado con la plantilla “Import comprobantes de pago”</div>
+    <label class="drop" id="dropX">Arrastrá el .xlsx acá o hacé clic<input type="file" id="inX" accept=".xlsx,.xls"></label>
+    <div class="files" id="infoX"></div>
+  </div>
+
+  <div class="card">
+    <div class="step">2. PDFs de comprobantes del banco (uno o varios)</div>
+    <label class="drop" id="dropP">Arrastrá los PDFs acá o hacé clic<input type="file" id="inP" accept=".pdf" multiple></label>
+    <div class="files" id="infoP"></div>
+  </div>
+
+  <div class="card alcance">
+    <div class="step">Qué comprobantes procesa Caris</div>
+    <p>✅ Transferencias que pagan <b>facturas</b>, <b>notas de débito</b> o <b>adelantos de asociados</b>.</p>
+    <p>✋ <b>Se suben a mano en Odoo:</b></p>
+    <ul>
+      <li><b>Pagos con retenciones:</b> el importe del banco no coincide con el de Odoo.</li>
+      <li><b>Pagos de servicios o impuestos (Epagos):</b> el comprobante no tiene Observaciones.</li>
+    </ul>
+    <p class="nota">Estos casos aparecen con ❌ en el resultado y no van en el ZIP.</p>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <button id="btn" disabled>Procesar</button>
+      <progress id="prog" value="0" max="1" hidden></progress>
+      <span id="estado"></span>
+    </div>
+  </div>
+
+  <div class="card" id="res" hidden>
+    <div class="row">
+      <span class="resumen" id="resumen"></span>
+      <button id="dl" hidden>⬇ Descargar ZIP</button>
+    </div>
+    <div class="aviso">⚠ Importá este ZIP <b>una sola vez</b>: reimportarlo duplica documentos en Odoo. Lo marcado con ❌ no va en el ZIP; revisalo a mano.</div>
+    <div class="tabla"><table>
+      <thead><tr><th></th><th>Archivo en el ZIP / origen</th><th>Nombre</th><th class="num">Importe</th><th>Motivo</th></tr></thead>
+      <tbody id="tbody"></tbody>
+    </table></div>
+  </div>
+</main>
+
+<script>
+// Contrato del wizard (CONTRATO-wizard.md): nombre ^\d+\s+[\d-]+\.pdf$, NRO por SUBSTRING
+// -> solo NRO completo validado contra el Excel + control de importe.
+pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+const WIZARD_RE = /^\d+\s+[\d\-]+\.pdf$/i;
+const NRO_OK = /^(\d{5}-\d{8}|\d{4}-\d{2}-\d{8})$/;
+// Observaciones: factura "FA-A 00001-00000056" / adelanto "2026 09 00000219".
+// En transferencias a otros bancos Credicoop saca los guiones: "FA C 00001 00000062".
+const FACTURA_RE = /(?<!\d)(\d{5})[\s-]+(\d{8})(?!\d)/g;
+const ADELANTO_RE = /(?<!\d)(\d{4})[\s-]+(\d{2})[\s-]+(\d{8})(?!\d)/g;
+const IMPORTE_RE = /\$\s*([\d.]+,\d{2})/g;
+
+const $ = id => document.getElementById(id);
+let excelFile = null, pdfFiles = [], zipBlob = null;
+const fmt = n => n == null ? "" : n.toLocaleString("es-AR", {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const sinTildes = s => String(s || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+
+function wireDrop(dropId, inputId, onFiles) {
+  const d = $(dropId), i = $(inputId);
+  i.addEventListener("change", () => onFiles([...i.files]));
+  d.addEventListener("dragover", e => { e.preventDefault(); d.classList.add("over"); });
+  d.addEventListener("dragleave", () => d.classList.remove("over"));
+  d.addEventListener("drop", e => { e.preventDefault(); d.classList.remove("over"); onFiles([...e.dataTransfer.files]); });
+}
+wireDrop("dropX", "inX", fs => { excelFile = fs.find(f => /\.xlsx?$/i.test(f.name)) || null; $("infoX").textContent = excelFile ? "✓ " + excelFile.name : ""; listo(); });
+wireDrop("dropP", "inP", fs => { pdfFiles = fs.filter(f => /\.pdf$/i.test(f.name)); $("infoP").textContent = pdfFiles.map(f => "✓ " + f.name).join("  ·  "); listo(); });
+function listo() { $("btn").disabled = !(excelFile && pdfFiles.length); }
+
+async function leerExcel(file) {
+  const wb = XLSX.read(await file.arrayBuffer());
+  const filas = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header: 1, raw: true, defval: null});
+  const head = filas[0].map(sinTildes);
+  const col = (...claves) => {
+    const i = head.findIndex(h => claves.every(c => h.includes(sinTildes(c))));
+    if (i < 0) throw new Error(`No encuentro la columna "${claves.join(" ")}" en el Excel.`);
+    return i;
+  };
+  const cNom = col("cliente/proveedor"), cCuit = col("nif"), cTot = col("total");
+  const cDoc = col("numero de documento"), cRef = col("referencia");
+  const pagos = new Map(), errores = [];
+  filas.slice(1).forEach((f, k) => {
+    if (!f.some(v => v !== null && v !== "")) return;
+    const fila = k + 2, cuit = String(f[cCuit] ?? "").replace(/\D/g, "");
+    // Número de Documento si tiene formato válido (facturas, notas de débito);
+    // si no (adelanto "AS/2026/1218") -> Referencia. La Referencia puede traer texto libre.
+    const doc = String(f[cDoc] ?? "").trim(), ref = String(f[cRef] ?? "").trim();
+    const nro = NRO_OK.test(doc) ? doc : ref;
+    const nombre = f[cNom], importe = Math.round(Number(f[cTot] || 0) * 100) / 100;
+    if (cuit.length !== 11 || !NRO_OK.test(nro)) {
+      errores.push({origen: `Excel fila ${fila}`, nombre, importe, motivo: `CUIT “${cuit}” / número “${nro}” con formato inválido`});
+    } else if (pagos.has(nro)) {
+      errores.push({origen: `Excel fila ${fila}`, nombre, importe, motivo: `Número ${nro} repetido en el Excel`});
+    } else {
+      pagos.set(nro, {cuit, nombre, importe, fila});
+    }
+  });
+  return {pagos, errores};
+}
+
+function extraer(texto) {
+  const obs = (texto.split("\n").find(l => l.toLowerCase().includes("observ")) || "").trim();
+  let nros = [...obs.matchAll(ADELANTO_RE)].map(m => `${m[1]}-${m[2]}-${m[3]}`);
+  if (!nros.length) nros = [...obs.matchAll(FACTURA_RE)].map(m => `${m[1]}-${m[2]}`);
+  const imps = [...texto.matchAll(IMPORTE_RE)];
+  const importe = imps.length ? Number(imps[imps.length - 1][1].replace(/\./g, "").replace(",", ".")) : null;
+  return {nros, importe, obs};
+}
+
+async function paginaACanvas(pdf, n) {
+  const page = await pdf.getPage(n);
+  const vp = page.getViewport({scale: 300 / 72});
+  const c = document.createElement("canvas");
+  c.width = vp.width; c.height = vp.height;
+  await page.render({canvasContext: c.getContext("2d"), viewport: vp}).promise;
+  return c;
+}
+
+async function procesar() {
+  $("btn").disabled = true; $("res").hidden = true; $("dl").hidden = true; zipBlob = null;
+  const prog = $("prog"), estado = $("estado");
+  prog.hidden = false; prog.value = 0;
+  let worker;
+  try {
+    estado.textContent = "Leyendo el Excel…";
+    const {pagos, errores} = await leerExcel(excelFile);
+    const docs = [];
+    let total = 0;
+    for (const f of pdfFiles) {
+      const bytes = new Uint8Array(await f.arrayBuffer());
+      const pdf = await pdfjsLib.getDocument({data: bytes.slice()}).promise;
+      docs.push({f, bytes, pdf}); total += pdf.numPages;
+    }
+    prog.max = total;
+    estado.textContent = "Preparando el OCR (la primera vez tarda un poco)…";
+    worker = await Tesseract.createWorker("eng");
+    await worker.setParameters({tessedit_pageseg_mode: "6"});
+
+    const zip = new JSZip(), usados = new Map(), oks = [];
+    let hechas = 0;
+    for (const {f, bytes, pdf} of docs) {
+      let pdfLib = null;
+      for (let n = 1; n <= pdf.numPages; n++) {
+        estado.textContent = `Leyendo página ${hechas + 1} de ${total}… (dejá esta pestaña a la vista: si cambiás de pestaña, Chrome la frena)`;
+        const origen = `${f.name} pág ${n}`;
+        const {data: {text}} = await worker.recognize(await paginaACanvas(pdf, n));
+        const {nros, importe, obs} = extraer(text);
+        prog.value = ++hechas;
+        const p = nros.length === 1 ? pagos.get(nros[0]) : null;
+        let motivo = null;
+        if (nros.length !== 1) motivo = `No pude leer UN número en Observaciones (OCR: “${obs}”)`;
+        else if (!p) motivo = `Número ${nros[0]} no está en el Excel (OCR: “${obs}”)`;
+        else if (usados.has(nros[0])) motivo = `Número ${nros[0]} ya salió de ${usados.get(nros[0])} (comprobante duplicado)`;
+        else if (importe == null || Math.abs(importe - p.importe) > 0.01) motivo = `Importe PDF ${fmt(importe)} ≠ Excel ${fmt(p.importe)}: revisar`;
+        if (motivo) { errores.push({origen, nombre: p?.nombre, importe, motivo}); continue; }
+
+        const nombre = `${p.cuit} ${nros[0]}.pdf`;
+        if (!WIZARD_RE.test(nombre)) throw new Error("Nombre inválido para Odoo: " + nombre);
+        pdfLib ??= await PDFLib.PDFDocument.load(bytes);
+        const uno = await PDFLib.PDFDocument.create();
+        const [pg] = await uno.copyPages(pdfLib, [n - 1]);
+        uno.addPage(pg);
+        zip.file(nombre, await uno.save());
+        usados.set(nros[0], origen);
+        oks.push({archivo: nombre, nombre: p.nombre, importe: p.importe, origen});
+      }
+    }
+    for (const [nro, p] of pagos) {
+      if (!usados.has(nro)) errores.push({origen: `Excel fila ${p.fila}`, nombre: p.nombre, importe: p.importe, motivo: `${nro}: sin comprobante en los PDFs`});
+    }
+    if (oks.length) zipBlob = await zip.generateAsync({type: "blob"});
+    mostrar(oks, errores, pagos.size);
+    estado.textContent = "Listo.";
+  } catch (e) {
+    estado.textContent = "Error: " + e.message;
+  } finally {
+    if (worker) await worker.terminate();
+    prog.hidden = true; listo();
+  }
+}
+
+function mostrar(oks, errores, totalExcel) {
+  const tb = $("tbody"); tb.innerHTML = "";
+  const fila = (cls, icono, a, b, imp, motivo) => {
+    const tr = document.createElement("tr"); if (cls) tr.className = cls;
+    [icono, a, b ?? "", fmt(imp), motivo].forEach((v, i) => {
+      const td = document.createElement("td"); td.textContent = v;
+      if (i === 3) td.className = "num"; if (i === 4) td.className = "motivo";
+      tr.appendChild(td);
+    });
+    tb.appendChild(tr);
+  };
+  errores.forEach(e => fila("err", "❌", e.origen, e.nombre, e.importe, e.motivo));
+  oks.sort((x, y) => x.archivo.localeCompare(y.archivo)).forEach(o => fila("", "✅", o.archivo, o.nombre, o.importe, o.origen));
+  $("resumen").innerHTML = `<span class="${errores.length ? "bad" : "ok"}">${oks.length} de ${totalExcel}</span> comprobantes del Excel listos` +
+    (errores.length ? ` · <span class="bad">${errores.length} problema(s)</span>` : "");
+  $("dl").hidden = !zipBlob; $("res").hidden = false;
+}
+
+$("btn").addEventListener("click", procesar);
+$("dl").addEventListener("click", () => {
+  const base = (excelFile.name.replace(/\.xlsx?$/i, "") || "comprobantes").replace(/[^\w\- ]+/g, "");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(zipBlob); a.download = `comprobantes ${base}.zip`; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+});
+</script>
+</body>
+</html>
