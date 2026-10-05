@@ -61,8 +61,8 @@
   <p class="sub">Comprobantes de pago Credicoop → ZIP para <b>Jornada de Pago › Importar ZIP de PDFs</b>. Todo se procesa en este navegador; los archivos no se suben a ningún lado.</p>
 
   <div class="card">
-    <div class="step">1. Excel exportado con la plantilla “Exportacion Caris”</div>
-    <p class="sub" style="margin:0 0 8px;font-size:14px">En Odoo: Jornada › <b>Pagos</b> › seleccionar <b>todos</b> › Acciones › Exportar › Plantilla <b>Exportacion Caris</b> › XLSX. Con otra plantilla faltan columnas y Caris no procesa.</p>
+    <div class="step">1. Excel exportado con la plantilla “Exportador Caris”</div>
+    <p class="sub" style="margin:0 0 8px;font-size:14px">En Odoo: Jornada › <b>Pagos</b> › seleccionar <b>todos</b> › Acciones › Exportar › Plantilla <b>Exportador Caris</b> › XLSX. Con otra plantilla faltan columnas y Caris no procesa.</p>
     <label class="drop" id="dropX">Arrastrá el .xlsx acá o hacé clic<input type="file" id="inX" accept=".xlsx,.xls"></label>
     <div class="files" id="infoX"></div>
   </div>
@@ -75,10 +75,10 @@
 
   <div class="card alcance">
     <div class="step">Qué comprobantes procesa Caris</div>
-    <p>✅ Transferencias que pagan <b>facturas</b>, <b>notas de débito</b> o <b>adelantos de asociados</b>.</p>
+    <p>✅ Transferencias que pagan <b>facturas</b>, <b>notas de débito</b> o <b>adelantos de asociados</b>, también con <b>retenciones</b>.</p>
+    <p>🔒 Controla que el importe y la cuenta destino (CBU o CVU) del comprobante coincidan con el pago en Odoo. Si el pago no tiene cuenta cargada en Odoo, el comprobante entra igual con ⚠️.</p>
     <p>✋ <b>Se suben a mano en Odoo:</b></p>
     <ul>
-      <li><b>Pagos con retenciones:</b> el importe del banco no coincide con el de Odoo.</li>
       <li><b>Pagos de servicios o impuestos (Epagos):</b> el comprobante no tiene Observaciones.</li>
     </ul>
     <p class="nota">Estos casos aparecen con ❌ en el resultado y no van en el ZIP.</p>
@@ -116,6 +116,9 @@ const NRO_OK = /^(\d{5}-\d{8}|\d{4}-\d{2}-\d{8})$/;
 const FACTURA_RE = /(?<!\d)(\d{5})[\s-]+(\d{8})(?!\d)/g;
 const ADELANTO_RE = /(?<!\d)(\d{4})[\s-]+(\d{2})[\s-]+(\d{8})(?!\d)/g;
 const IMPORTE_RE = /\$\s*([\d.]+,\d{2})/g;
+// Renglón "...a acreditar:": CBU/CVU "01234567-89012345678901" (22 dígitos) o, entre cuentas
+// Credicoop, la cuenta interna "CC$ 191-123-456789/0" (banco-sucursal-cuenta/dígito).
+const CUENTA_INTERNA_RE = /(\d{3})-(\d{3})-(\d{6})\/(\d)/;
 
 const $ = id => document.getElementById(id);
 let excelFile = null, pdfFiles = [], zipBlob = null;
@@ -139,10 +142,11 @@ async function leerExcel(file) {
   const head = filas[0].map(sinTildes);
   const col = (...claves) => {
     const i = head.findIndex(h => claves.every(c => h.includes(sinTildes(c))));
-    if (i < 0) throw new Error(`No encuentro la columna "${claves.join(" ")}" en el Excel. Exportalo de nuevo con la plantilla “Exportacion Caris”.`);
+    if (i < 0) throw new Error(`No encuentro la columna "${claves.join(" ")}" en el Excel. Exportalo de nuevo con la plantilla “Exportador Caris”.`);
     return i;
   };
-  const cNom = col("cliente/proveedor"), cCuit = col("nif"), cTot = col("total");
+  const cNom = col("cliente/proveedor"), cCuit = col("nif"), cImp = col("importe");
+  const cCbu = col("cuenta bancaria receptora");
   const cDoc = col("numero de documento"), cRef = col("referencia");
   const pagos = new Map(), errores = [];
   filas.slice(1).forEach((f, k) => {
@@ -152,13 +156,16 @@ async function leerExcel(file) {
     // si no (adelanto "AS/2026/1218") -> Referencia. La Referencia puede traer texto libre.
     const doc = String(f[cDoc] ?? "").trim(), ref = String(f[cRef] ?? "").trim();
     const nro = NRO_OK.test(doc) ? doc : ref;
-    const nombre = f[cNom], importe = Math.round(Number(f[cTot] || 0) * 100) / 100;
+    // Importe = neto transferido (ya descontadas las retenciones), igual a lo que muestra el banco.
+    const nombre = f[cNom], importe = Math.round(Number(f[cImp] || 0) * 100) / 100;
+    // La celda puede traer "0140...1204" o "0140...1204 - Banco X" (si se exportó la cuenta sin el subcampo)
+    const cbu = (String(f[cCbu] ?? "").match(/(?<!\d)\d{22}(?!\d)/) || [""])[0];
     if (cuit.length !== 11 || !NRO_OK.test(nro)) {
       errores.push({origen: `Excel fila ${fila}`, nombre, importe, motivo: `CUIT “${cuit}” / número “${nro}” con formato inválido`});
     } else if (pagos.has(nro)) {
       errores.push({origen: `Excel fila ${fila}`, nombre, importe, motivo: `Número ${nro} repetido en el Excel`});
     } else {
-      pagos.set(nro, {cuit, nombre, importe, fila});
+      pagos.set(nro, {cuit, nombre, importe, cbu, fila});
     }
   });
   return {pagos, errores};
@@ -171,6 +178,24 @@ function extraer(texto) {
   const imps = [...texto.matchAll(IMPORTE_RE)];
   const importe = imps.length ? Number(imps[imps.length - 1][1].replace(/\./g, "").replace(",", ".")) : null;
   return {nros, importe, obs};
+}
+
+// Devuelve {error, aviso}. Error: la cuenta del PDF no es la de Odoo -> no va al ZIP.
+// Aviso: no se pudo verificar -> va al ZIP igual, pero se informa.
+function chequearCuenta(texto, cbuOdoo) {
+  if (!cbuOdoo) return {aviso: "El pago no tiene cuenta bancaria en Odoo: cuenta no verificada"};
+  const linea = texto.split("\n").find(l => l.toLowerCase().includes("acreditar")) || "";
+  const dato = linea.includes(":") ? linea.slice(linea.indexOf(":") + 1) : linea;
+  const m = dato.match(CUENTA_INTERNA_RE), digitos = dato.replace(/\D/g, "");
+  let leido, ok;
+  if (m) {  // CBU Credicoop = 191 + 0 + sucursal + ... + cuenta + dígito + ...
+    const [, banco, suc, nro, dv] = m;
+    leido = `${banco}-${suc}-${nro}/${dv}`;
+    ok = cbuOdoo.startsWith(banco) && cbuOdoo.slice(3, 7) === "0" + suc && cbuOdoo.slice(8).includes(nro + dv);
+  } else if (digitos.length === 22) {
+    leido = digitos; ok = digitos === cbuOdoo;
+  } else return {aviso: "No pude leer la cuenta destino del PDF: cuenta no verificada"};
+  return ok ? {} : {error: `Cuenta PDF ${leido} ≠ Odoo ${cbuOdoo}: revisar`};
 }
 
 async function paginaACanvas(pdf, n) {
@@ -218,6 +243,8 @@ async function procesar() {
         else if (!p) motivo = `Número ${nros[0]} no está en el Excel (OCR: “${obs}”)`;
         else if (usados.has(nros[0])) motivo = `Número ${nros[0]} ya salió de ${usados.get(nros[0])} (comprobante duplicado)`;
         else if (importe == null || Math.abs(importe - p.importe) > 0.01) motivo = `Importe PDF ${fmt(importe)} ≠ Excel ${fmt(p.importe)}: revisar`;
+        const cuenta = motivo ? {} : chequearCuenta(text, p.cbu);
+        motivo ??= cuenta.error;
         if (motivo) { errores.push({origen, nombre: p?.nombre, importe, motivo}); continue; }
 
         const nombre = `${p.cuit} ${nros[0]}.pdf`;
@@ -228,7 +255,7 @@ async function procesar() {
         uno.addPage(pg);
         zip.file(nombre, await uno.save());
         usados.set(nros[0], origen);
-        oks.push({archivo: nombre, nombre: p.nombre, importe: p.importe, origen});
+        oks.push({archivo: nombre, nombre: p.nombre, importe: p.importe, origen, aviso: cuenta.aviso});
       }
     }
     for (const [nro, p] of pagos) {
@@ -257,8 +284,11 @@ function mostrar(oks, errores, totalExcel) {
     tb.appendChild(tr);
   };
   errores.forEach(e => fila("err", "❌", e.origen, e.nombre, e.importe, e.motivo));
-  oks.sort((x, y) => x.archivo.localeCompare(y.archivo)).forEach(o => fila("", "✅", o.archivo, o.nombre, o.importe, o.origen));
+  const avisos = oks.filter(o => o.aviso);
+  avisos.sort((x, y) => x.archivo.localeCompare(y.archivo)).forEach(o => fila("", "⚠️", o.archivo, o.nombre, o.importe, `Va en el ZIP. ${o.aviso} (${o.origen})`));
+  oks.filter(o => !o.aviso).sort((x, y) => x.archivo.localeCompare(y.archivo)).forEach(o => fila("", "✅", o.archivo, o.nombre, o.importe, o.origen));
   $("resumen").innerHTML = `<span class="${errores.length ? "bad" : "ok"}">${oks.length} de ${totalExcel}</span> comprobantes del Excel listos` +
+    (avisos.length ? ` · ${avisos.length} con la cuenta sin verificar` : "") +
     (errores.length ? ` · <span class="bad">${errores.length} problema(s)</span>` : "");
   $("dl").hidden = !zipBlob; $("res").hidden = false;
 }

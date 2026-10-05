@@ -8,7 +8,7 @@ Corre **fuera de Odoo**: no se conecta a ninguna base ni escribe nada en Odoo. L
 
 ## Cómo se usa
 
-1. En Odoo, abrir la jornada › **Pagos** › seleccionar todos › Acciones › Exportar, con la plantilla **"Exportacion Caris"** y formato XLSX. Con otra plantilla faltan columnas y Caris no puede cruzar los datos.
+1. En Odoo, abrir la jornada › **Pagos** › seleccionar todos › Acciones › Exportar, con la plantilla **"Exportador Caris"** y formato XLSX. Con otra plantilla faltan columnas y Caris no puede cruzar los datos.
 2. Abrir `caris.html` en Chrome.
 3. Cargar el Excel y los PDFs y apretar **Procesar**. El OCR tarda unos segundos por página. **No cambiar de pestaña mientras procesa**: Chrome frena el OCR en segundo plano.
 4. Revisar el reporte y descargar el ZIP.
@@ -23,10 +23,15 @@ Lo marcado con ❌ no entra en el ZIP y se sube a mano en Odoo.
 | Facturas de proveedor | ✅ |
 | Adelantos de asociados | ✅ |
 | Notas de débito | ✅ |
-| Pagos con retenciones (el banco pagó menos que lo que figura en Odoo) | ✋ a mano |
+| Pagos con retenciones | ✅ |
 | Pagos de servicios por Epagos (sin Observaciones) | ✋ a mano |
 
-**Cómo cruza:** lee con OCR el campo **Observaciones** del comprobante (ej. `FA-A 00001-00000056`), busca ese número en el Excel, toma el CUIT de ahí y además verifica que el importe del PDF coincida exactamente con el del Excel. Si no hay coincidencia exacta, no adivina: lo marca con ❌.
+**Cómo cruza:** lee con OCR el campo **Observaciones** del comprobante (ej. `FA-A 00001-00000056`), busca ese número en el Excel y toma el CUIT de ahí. Después hace dos controles:
+
+- **Importe:** el del PDF tiene que coincidir al centavo con la columna **Importe** del pago, que es el neto transferido (ya descontadas las retenciones).
+- **Cuenta destino:** el CBU o CVU "a acreditar" del PDF tiene que coincidir con la **Cuenta bancaria receptora** del pago. En transferencias entre cuentas Credicoop el comprobante muestra la cuenta interna (`CC$ 191-123-456789/0`), que se verifica contra el CBU.
+
+Si algo no coincide, no adivina: lo marca con ❌. Si el pago no tiene cuenta en Odoo o no se puede leer la del PDF, el comprobante entra en el ZIP con ⚠️ "cuenta no verificada".
 
 ## Publicarlo (para quien administra la página de aplicaciones)
 

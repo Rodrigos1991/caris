@@ -8,6 +8,8 @@ Contrato del wizard (ver CONTRATO-wizard.md):
   - NRO se busca por SUBSTRING -> solo se acepta el NRO completo, validado contra el Excel
   - Odoo muestra solo 10 no-procesados -> el reporte completo lo da Caris
   - reimportar el mismo ZIP duplica documentos en Odoo -> se avisa en el reporte
+Controles: importe del PDF = "Importe" del pago (el neto transferido, ya descontadas las
+retenciones) y cuenta destino del PDF = "Cuenta bancaria receptora" del pago (CBU o CVU).
 """
 import argparse
 import io
@@ -28,6 +30,9 @@ NRO_OK = re.compile(r"^(\d{5}-\d{8}|\d{4}-\d{2}-\d{8})$")
 FACTURA_RE = re.compile(r"(?<!\d)(\d{5})[\s-]+(\d{8})(?!\d)")
 ADELANTO_RE = re.compile(r"(?<!\d)(\d{4})[\s-]+(\d{2})[\s-]+(\d{8})(?!\d)")
 IMPORTE_RE = re.compile(r"\$\s*([\d.]+,\d{2})")
+# Renglón "...a acreditar:": CBU/CVU "01234567-89012345678901" (22 dígitos) o, entre cuentas
+# Credicoop, la cuenta interna "CC$ 191-123-456789/0" (banco-sucursal-cuenta/dígito).
+CUENTA_INTERNA_RE = re.compile(r"(\d{3})-(\d{3})-(\d{6})/(\d)")
 
 
 def leer_excel(path):
@@ -41,7 +46,8 @@ def leer_excel(path):
                 return i
         sys.exit(f"ERROR: no encuentro la columna {claves} en el Excel. Columnas: {head}")
 
-    c_nom, c_cuit, c_tot = col("Cliente/proveedor"), col("NIF"), col("Total")
+    c_nom, c_cuit, c_imp = col("Cliente/proveedor"), col("NIF"), col("Importe")
+    c_cbu = col("Cuenta bancaria receptora")
     c_doc, c_ref = col("Número de Documento"), col("Referencia")
     pagos, errores = {}, []
     for n, f in enumerate(filas[1:], start=2):
@@ -58,7 +64,11 @@ def leer_excel(path):
         if nro in pagos:
             errores.append(f"Excel fila {n}: NRO {nro} repetido")
             continue
-        pagos[nro] = {"cuit": cuit, "nombre": f[c_nom], "importe": round(float(f[c_tot] or 0), 2), "fila": n}
+        # La celda puede traer "0140...1204" o "0140...1204 - Banco X" (si se exportó la cuenta sin el subcampo)
+        m = re.search(r"(?<!\d)\d{22}(?!\d)", str(f[c_cbu] or ""))
+        cbu = m.group() if m else ""
+        pagos[nro] = {"cuit": cuit, "nombre": f[c_nom], "importe": round(float(f[c_imp] or 0), 2),
+                      "cbu": cbu, "fila": n}
     return pagos, errores
 
 
@@ -67,6 +77,39 @@ def ocr(page):
     r = subprocess.run([TESSERACT, "stdin", "stdout", "--psm", "6", "-l", "eng"],
                        input=png, capture_output=True, check=True)
     return r.stdout.decode("utf-8", "replace")
+
+
+def leer_cuenta(texto):
+    """Cuenta destino del renglón "a acreditar": ("cbu", 22 dígitos), ("interna", grupos) o None."""
+    linea = next((l for l in texto.splitlines() if "acreditar" in l.lower()), "")
+    dato = linea.split(":", 1)[-1]
+    m = CUENTA_INTERNA_RE.search(dato)
+    if m:
+        return "interna", m.groups()
+    digitos = re.sub(r"\D", "", dato)
+    return ("cbu", digitos) if len(digitos) == 22 else None
+
+
+def chequear_cuenta(texto, cbu_odoo):
+    """Devuelve (error, aviso). Error: la cuenta del PDF no es la de Odoo -> no va al ZIP.
+    Aviso: no se pudo verificar -> va al ZIP igual, pero se informa."""
+    if not cbu_odoo:
+        return None, "el pago no tiene cuenta bancaria en Odoo: cuenta no verificada"
+    cuenta = leer_cuenta(texto)
+    if cuenta is None:
+        return None, "no pude leer la cuenta destino del PDF: cuenta no verificada"
+    tipo, dato = cuenta
+    if tipo == "cbu":
+        leido, ok = dato, dato == cbu_odoo
+    else:  # CBU Credicoop = 191 + 0 + sucursal + ... + cuenta + dígito + ...
+        banco, suc, nro, dv = dato
+        leido = f"{banco}-{suc}-{nro}/{dv}"
+        ok = cbu_odoo.startswith(banco) and cbu_odoo[3:7] == "0" + suc and nro + dv in cbu_odoo[8:]
+    return (None if ok else f"cuenta PDF {leido} ≠ Odoo {cbu_odoo}"), None
+
+
+def nombre_pdf(p, nro):
+    return f"{p['cuit']} {nro}.pdf"
 
 
 def extraer(texto):
@@ -89,13 +132,15 @@ def main():
 
     pagos, errores = leer_excel(a.excel)
     usados = {}  # nro -> origen
+    avisos = []  # van al ZIP, pero con la cuenta sin verificar
     salida = []  # (nombre_archivo, bytes)
 
     for pdf in a.pdfs:
         doc = pymupdf.open(pdf)
         for i, page in enumerate(doc):
             origen = f"{Path(pdf).name} pág {i + 1}"
-            nros, importe, obs = extraer(ocr(page))
+            texto = ocr(page)
+            nros, importe, obs = extraer(texto)
             if len(nros) != 1:
                 errores.append(f"{origen}: no pude leer UN número en Observaciones (OCR: '{obs}')")
                 continue
@@ -110,7 +155,13 @@ def main():
             if importe is None or abs(importe - p["importe"]) > 0.01:
                 errores.append(f"{origen}: NRO {nro} importe PDF {importe} ≠ Excel {p['importe']} — revisar")
                 continue
-            nombre = f"{p['cuit']} {nro}.pdf"
+            error, aviso = chequear_cuenta(texto, p["cbu"])
+            if error:
+                errores.append(f"{origen}: NRO {nro} {error} — revisar")
+                continue
+            nombre = nombre_pdf(p, nro)
+            if aviso:
+                avisos.append(f"{nombre}: {aviso}")
             assert WIZARD_RE.match(nombre), nombre
             uno = pymupdf.open()
             uno.insert_pdf(doc, from_page=i, to_page=i)
@@ -129,6 +180,10 @@ def main():
     print(f"\nCaris — {len(salida)} de {len(pagos)} comprobantes del Excel listos → {a.salida if salida else '(sin ZIP)'}")
     for nombre, _ in sorted(salida):
         print(f"  OK  {nombre}")
+    if avisos:
+        print(f"\n⚠ {len(avisos)} aviso(s) — van en el ZIP, pero revisalos:")
+        for av in avisos:
+            print(f"  ⚠ {av}")
     if errores:
         print(f"\n⚠ {len(errores)} problema(s) — estos NO van en el ZIP:")
         for e in errores:
